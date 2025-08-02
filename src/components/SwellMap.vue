@@ -233,34 +233,34 @@ const addCommunitySpots = () => {
           window.point2.lat, window.point2.lng
         )
         
-        // Draw triangle with community spot styling (dark grey for visibility)
+        // Draw triangle with community spot styling (dark grey for visibility, more transparent)
         const triangle = L.polygon(trianglePoints, {
           color: '#2c3e50',
-          weight: 2,
-          opacity: 0.8,
+          weight: 1,
+          opacity: 0.4,
           fillColor: '#34495e',
-          fillOpacity: 0.3
+          fillOpacity: 0.1
         }).addTo(map)
         
         trianglePolygons.push(triangle)
         
-        // Add small markers at triangle endpoints
+        // Add small markers at triangle endpoints (also more transparent)
         const marker1 = L.circleMarker([window.point1.lat, window.point1.lng], {
-          radius: 4,
+          radius: 3,
           fillColor: '#2c3e50',
           color: '#fff',
           weight: 1,
-          opacity: 0.8,
-          fillOpacity: 0.8
+          opacity: 0.5,
+          fillOpacity: 0.5
         }).addTo(map)
         
         const marker2 = L.circleMarker([window.point2.lat, window.point2.lng], {
-          radius: 4,
+          radius: 3,
           fillColor: '#2c3e50',
           color: '#fff',
           weight: 1,
-          opacity: 0.8,
-          fillOpacity: 0.8
+          opacity: 0.5,
+          fillOpacity: 0.5
         }).addTo(map)
         
         communityMarkers.push(marker1, marker2)
