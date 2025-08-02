@@ -22,8 +22,8 @@ let trianglePolygons = []
 
 // Helper function to extend triangle points to create infinite ocean exposure
 const createInfiniteTriangle = (spotLat, spotLng, point1Lat, point1Lng, point2Lat, point2Lng) => {
-  // Fixed extension distance in degrees (approximately 2000km)
-  const extensionDistance = 20 // degrees
+  // Fixed extension distance in degrees (approximately 5000km)
+  const extensionDistance = 50 // degrees
   
   // Calculate normalized direction vectors from spot to each point
   const dir1 = {
