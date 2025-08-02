@@ -1,7 +1,5 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
+import { ref, onMounted, watch, nextTick } from 'vue'
 
 const props = defineProps({
   selectedSpot: Object,
@@ -12,11 +10,15 @@ const props = defineProps({
 
 const emit = defineEmits(['spot-selected', 'windows-updated', 'load-community-spot', 'spot-completed', 'save-to-community'])
 const mapContainer = ref(null)
+let windyAPI = null
 let map = null
+let L = null // Store Leaflet instance from Windy
 let spotMarker = null
 let currentWindow = null
 let windowLines = []
 let isDrawingMode = false
+let communityMarkers = []
+let trianglePolygons = []
 
 // Helper function to extend triangle points to create infinite ocean exposure
 const createInfiniteTriangle = (spotLat, spotLng, point1Lat, point1Lng, point2Lat, point2Lng) => {
@@ -58,7 +60,7 @@ const createInfiniteTriangle = (spotLat, spotLng, point1Lat, point1Lng, point2La
     lng: spotLng + normalizedDir2.lng * extensionDistance
   }
   
-  // Create the polygon points for an extended triangle
+  // Create the polygon points for an extended triangle (format for Windy: [lat, lng] pairs)
   return [
     [spotLat, spotLng],
     [point1Lat, point1Lng],
@@ -68,36 +70,136 @@ const createInfiniteTriangle = (spotLat, spotLng, point1Lat, point1Lng, point2La
   ]
 }
 
-onMounted(() => {
-  // Initialize the map with default location (Los Angeles)
-  map = L.map(mapContainer.value).setView([34.0522, -118.2437], 10)
+// Load Windy API scripts
+const loadWindyAPI = () => {
+  return new Promise((resolve, reject) => {
+    // Check if already loaded
+    if (window.windyInit) {
+      resolve()
+      return
+    }
+    
+    // Load Leaflet first (required by Windy)
+    const leafletScript = document.createElement('script')
+    leafletScript.src = 'https://unpkg.com/leaflet@1.4.0/dist/leaflet.js'
+    leafletScript.onload = () => {
+      // Load Leaflet CSS
+      const leafletCSS = document.createElement('link')
+      leafletCSS.rel = 'stylesheet'
+      leafletCSS.href = 'https://unpkg.com/leaflet@1.4.0/dist/leaflet.css'
+      document.head.appendChild(leafletCSS)
+      
+      // Then load Windy API
+      const windyScript = document.createElement('script')
+      windyScript.src = 'https://api.windy.com/assets/map-forecast/libBoot.js'
+      windyScript.onload = resolve
+      windyScript.onerror = reject
+      document.head.appendChild(windyScript)
+    }
+    leafletScript.onerror = reject
+    document.head.appendChild(leafletScript)
+  })
+}
 
-  // Add tile layer
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors'
-  }).addTo(map)
-
-  // Try to get user's location
-  getUserLocation()
-
-  // Try to get user's location
-  getUserLocation()
-
-  // Add click event listener
-  map.on('click', handleMapClick)
-
-  // Add some sample surf spots as markers
-  addSampleSpots()
-  
-  // Add community spots
-  addCommunitySpots()
+onMounted(async () => {
+  try {
+    // Load Windy API
+    await loadWindyAPI()
+    
+    const apiKey = import.meta.env.VITE_WINDY_API_KEY
+    if (!apiKey || apiKey === 'YOUR_WINDY_API_KEY') {
+      console.warn('Windy API key not configured. Map functionality will be limited.')
+    }
+    
+    // Get user's location first to center the map
+    const userLocation = await getUserLocation()
+    
+    const options = {
+      key: apiKey || 'demo',
+      lat: userLocation.lat,
+      lon: userLocation.lng,
+      zoom: 10,
+      overlay: 'wind' // Start with wind overlay
+    }
+    
+    // Initialize windy map API
+    window.windyInit(options, (windyAPIInstance) => {
+      const { map: windyMap, store, picker } = windyAPIInstance
+      
+      // Store references
+      windyAPI = windyAPIInstance
+      map = windyMap
+      L = window.L // Get Leaflet instance that Windy loaded
+      
+      // Set up map click handler
+      map.on('click', handleMapClick)
+      
+      // Add community spots now that L is available
+      addCommunitySpots()
+      
+      console.log('Windy map initialized successfully')
+    })
+  } catch (error) {
+    console.error('Failed to initialize Windy map:', error)
+  }
 })
 
+const getUserLocation = () => {
+  return new Promise((resolve) => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords
+          console.log('Location found:', latitude, longitude)
+          resolve({ lat: latitude, lng: longitude })
+        },
+        async (error) => {
+          console.warn('Geolocation error:', error.message)
+          // Fallback to IP-based location detection
+          const ipLocation = await getLocationFromIP()
+          resolve(ipLocation)
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 300000 // 5 minutes
+        }
+      )
+    } else {
+      console.warn('Geolocation is not supported by this browser')
+      getLocationFromIP().then(resolve)
+    }
+  })
+}
+
+const getLocationFromIP = async () => {
+  try {
+    // Use a free IP geolocation service
+    const response = await fetch('https://ipapi.co/json/')
+    const data = await response.json()
+    
+    if (data.latitude && data.longitude) {
+      const { latitude, longitude, city, country } = data
+      console.log('IP location found:', city, country, latitude, longitude)
+      return { lat: latitude, lng: longitude, city, country }
+    }
+  } catch (error) {
+    console.warn('IP geolocation failed:', error.message)
+  }
+  
+  // Default to Auckland
+  return { lat: -36.8485, lng: 174.7633, city: 'Auckland', country: 'NZ' }
+}
+
 const addCommunitySpots = () => {
-  if (!props.communitySpots || props.communitySpots.length === 0) return
+  if (!props.communitySpots || props.communitySpots.length === 0 || !map || !L) return
+  
+  // Clear existing community markers
+  communityMarkers.forEach(marker => map.removeLayer(marker))
+  communityMarkers = []
   
   props.communitySpots.forEach(spotConfig => {
-    // Add the community spot marker
+    // Add the community spot marker using Leaflet (Windy uses Leaflet underneath)
     const marker = L.circleMarker([spotConfig.location.lat, spotConfig.location.lng], {
       radius: 8,
       fillColor: '#28a745',
@@ -119,6 +221,7 @@ const addCommunitySpots = () => {
     `)
     
     marker.bindTooltip(`${spotConfig.name} (Community)`, { permanent: false, direction: 'top' })
+    communityMarkers.push(marker)
     
     // Draw swell window triangles immediately for all community spots
     if (spotConfig.swellWindows && spotConfig.swellWindows.length > 0) {
@@ -130,33 +233,37 @@ const addCommunitySpots = () => {
           window.point2.lat, window.point2.lng
         )
         
-        // Draw triangle with community spot styling (green)
-        L.polygon(trianglePoints, {
-          color: '#28a745',
-          weight: 1,
-          opacity: 0.6,
-          fillColor: '#28a745',
-          fillOpacity: 0.1
+        // Draw triangle with community spot styling (dark grey for visibility)
+        const triangle = L.polygon(trianglePoints, {
+          color: '#2c3e50',
+          weight: 2,
+          opacity: 0.8,
+          fillColor: '#34495e',
+          fillOpacity: 0.3
         }).addTo(map)
+        
+        trianglePolygons.push(triangle)
         
         // Add small markers at triangle endpoints
-        L.circleMarker([window.point1.lat, window.point1.lng], {
+        const marker1 = L.circleMarker([window.point1.lat, window.point1.lng], {
           radius: 4,
-          fillColor: '#28a745',
+          fillColor: '#2c3e50',
           color: '#fff',
           weight: 1,
           opacity: 0.8,
           fillOpacity: 0.8
         }).addTo(map)
         
-        L.circleMarker([window.point2.lat, window.point2.lng], {
+        const marker2 = L.circleMarker([window.point2.lat, window.point2.lng], {
           radius: 4,
-          fillColor: '#28a745',
+          fillColor: '#2c3e50',
           color: '#fff',
           weight: 1,
           opacity: 0.8,
           fillOpacity: 0.8
         }).addTo(map)
+        
+        communityMarkers.push(marker1, marker2)
       })
     }
   })
@@ -165,7 +272,7 @@ const addCommunitySpots = () => {
 // Make function available globally for popup buttons
 window.loadCommunitySpot = (spotId) => {
   const spotConfig = props.communitySpots.find(s => s.id === spotId)
-  if (spotConfig) {
+  if (spotConfig && L) {
     // First remove any existing loaded spot visualizations
     map.eachLayer((layer) => {
       // Remove loaded spot triangles (purple polygons)
@@ -225,122 +332,10 @@ window.loadCommunitySpot = (spotId) => {
 
 // Watch for changes in community spots and update markers
 watch(() => props.communitySpots, () => {
-  if (map) {
-    // Remove existing community markers and triangles
-    map.eachLayer((layer) => {
-      // Remove community spot markers (green circles)
-      if (layer instanceof L.CircleMarker && layer.options.fillColor === '#28a745') {
-        map.removeLayer(layer)
-      }
-      // Remove community triangles (green polygons)
-      if (layer instanceof L.Polygon && layer.options.fillColor === '#28a745') {
-        map.removeLayer(layer)
-      }
-    })
-    // Add updated community spots with their triangles
+  if (map && L) {
     addCommunitySpots()
   }
 }, { deep: true })
-
-const getUserLocation = () => {
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords
-        // Center map on user's location
-        map.setView([latitude, longitude], 12)
-        
-        // Add a marker to show user's location
-        L.marker([latitude, longitude], {
-          icon: L.divIcon({
-            className: 'user-location-marker',
-            html: '📍',
-            iconSize: [25, 25],
-            iconAnchor: [12, 25]
-          })
-        }).addTo(map).bindPopup(`
-          <div style="text-align: center;">
-            <strong>Your Location</strong><br>
-            Lat: ${latitude.toFixed(4)}<br>
-            Lng: ${longitude.toFixed(4)}
-          </div>
-        `)
-        
-        console.log('Location found:', latitude, longitude)
-      },
-      (error) => {
-        console.warn('Geolocation error:', error.message)
-        // Fallback to IP-based location detection
-        getLocationFromIP()
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 300000 // 5 minutes
-      }
-    )
-  } else {
-    console.warn('Geolocation is not supported by this browser')
-    getLocationFromIP()
-  }
-}
-
-const getLocationFromIP = async () => {
-  try {
-    // Use a free IP geolocation service
-    const response = await fetch('https://ipapi.co/json/')
-    const data = await response.json()
-    
-    if (data.latitude && data.longitude) {
-      const { latitude, longitude, city, country } = data
-      map.setView([latitude, longitude], 10)
-      
-      // Add a marker to show approximate location
-      L.marker([latitude, longitude], {
-        icon: L.divIcon({
-          className: 'ip-location-marker',
-          html: '🌐',
-          iconSize: [25, 25],
-          iconAnchor: [12, 25]
-        })
-      }).addTo(map).bindPopup(`
-        <div style="text-align: center;">
-          <strong>Approximate Location</strong><br>
-          ${city}, ${country}<br>
-          <small>Based on IP address</small>
-        </div>
-      `)
-      
-      console.log('IP location found:', city, country, latitude, longitude)
-    }
-  } catch (error) {
-    console.warn('IP geolocation failed:', error.message)
-    // Keep default location (Los Angeles)
-  }
-}
-
-const addSampleSpots = () => {
-  // Add some sample surf spots as markers
-  const sampleSpots = [
-    { name: 'Malibu', lat: 34.0259, lng: -118.7798 },
-    { name: 'Manhattan Beach', lat: 33.8847, lng: -118.4109 },
-    { name: 'Huntington Beach', lat: 33.6595, lng: -117.9988 },
-    { name: 'Laguna Beach', lat: 33.5427, lng: -117.7854 }
-  ]
-
-  sampleSpots.forEach(spot => {
-    const marker = L.circleMarker([spot.lat, spot.lng], {
-      radius: 6,
-      fillColor: '#3388ff',
-      color: '#fff',
-      weight: 2,
-      opacity: 1,
-      fillOpacity: 0.8
-    }).addTo(map)
-    
-    marker.bindTooltip(spot.name, { permanent: false, direction: 'top' })
-  })
-}
 
 const handleMapClick = (e) => {
   const { lat, lng } = e.latlng
@@ -355,12 +350,14 @@ const handleMapClick = (e) => {
 }
 
 const selectSpot = (lat, lng) => {
+  if (!L) return // Make sure Leaflet is available
+  
   // Clear existing spot marker
   if (spotMarker) {
     map.removeLayer(spotMarker)
   }
   
-  // Add new spot marker
+  // Add new spot marker using Leaflet
   spotMarker = L.marker([lat, lng], {
     icon: L.divIcon({
       className: 'spot-marker',
@@ -397,6 +394,8 @@ const selectSpot = (lat, lng) => {
 }
 
 const addWindowPoint = (lat, lng) => {
+  if (!L) return // Make sure Leaflet is available
+  
   if (!currentWindow) {
     // Start new window
     currentWindow = {
@@ -404,7 +403,7 @@ const addWindowPoint = (lat, lng) => {
       point2: null,
       marker1: L.circleMarker([lat, lng], {
         radius: 8,
-        fillColor: '#ff6b6b',
+        fillColor: '#2c3e50',
         color: '#fff',
         weight: 2,
         opacity: 1,
@@ -416,7 +415,7 @@ const addWindowPoint = (lat, lng) => {
     currentWindow.point2 = { lat, lng }
     currentWindow.marker2 = L.circleMarker([lat, lng], {
       radius: 8,
-      fillColor: '#ff6b6b',
+      fillColor: '#2c3e50',
       color: '#fff',
       weight: 2,
       opacity: 1,
@@ -431,11 +430,11 @@ const addWindowPoint = (lat, lng) => {
     )
     
     const triangle = L.polygon(trianglePoints, {
-      color: '#ff6b6b',
-      weight: 2,
-      opacity: 0.8,
-      fillColor: '#ff6b6b',
-      fillOpacity: 0.2
+      color: '#2c3e50',
+      weight: 3,
+      opacity: 0.9,
+      fillColor: '#34495e',
+      fillOpacity: 0.4
     }).addTo(map)
     
     currentWindow.triangle = triangle
@@ -536,12 +535,13 @@ window.resetSpot = resetSpot
 
 <template>
   <div class="map-wrapper">
-    <div ref="mapContainer" class="map-container"></div>
+    <!-- Windy will initialize its map in this div -->
+    <div id="windy" class="map-container"></div>
     <div class="map-overlay">
       <div class="instructions">
         <h3>🌊 Swell Window Calculator</h3>
         <div class="location-status">
-          <small>📍 Map centered on your location</small>
+          <small>📍 Map with real weather data</small>
         </div>
         <div class="step" v-if="!selectedSpot">
           <strong>Step 1:</strong> Click on the map to select and name a spot
