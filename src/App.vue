@@ -118,9 +118,23 @@ const calculateExposureAngles = () => {
   // Calculate exposure angles from swell windows
   const angles = []
   swellWindows.value.forEach(window => {
-    const startAngle = calculateBearing(selectedSpot.value.coordinates, window.point1)
-    const endAngle = calculateBearing(selectedSpot.value.coordinates, window.point2)
-    angles.push({ start: startAngle, end: endAngle })
+    const angle1 = calculateBearing(selectedSpot.value.coordinates, window.point1)
+    const angle2 = calculateBearing(selectedSpot.value.coordinates, window.point2)
+    
+    // Ensure start is always the smaller angle for consistent calculations
+    const startAngle = Math.min(angle1, angle2)
+    const endAngle = Math.max(angle1, angle2)
+    
+    // Handle the case where the arc crosses 0° (e.g., 350° to 10°)
+    const directDiff = endAngle - startAngle
+    const wraparoundDiff = (startAngle + 360) - endAngle
+    
+    if (wraparoundDiff < directDiff) {
+      // The shorter path crosses 0°, so swap start/end
+      angles.push({ start: endAngle, end: startAngle + 360 })
+    } else {
+      angles.push({ start: startAngle, end: endAngle })
+    }
   })
   
   exposureAngles.value = mergeAngles(angles)

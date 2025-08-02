@@ -131,8 +131,11 @@ const createSimpleArc = (startAngle, endAngle) => {
   const endX = centerX + radius * Math.cos(endRad)
   const endY = centerY + radius * Math.sin(endRad)
   
-  // Determine if arc should be large (> 180 degrees)
-  const angleDiff = endAngle - startAngle
+  // Calculate angle difference, always using the smaller of the two possible arcs
+  let angleDiff = Math.abs(endAngle - startAngle)
+  if (angleDiff > 180) {
+    angleDiff = 360 - angleDiff
+  }
   const largeArcFlag = angleDiff > 180 ? 1 : 0
   
   // Create triangular sector path: move to center, line to start, arc to end, close back to center
@@ -143,8 +146,14 @@ const totalExposureRange = computed(() => {
   if (!props.exposureAngles || props.exposureAngles.length === 0) return 0
   
   return props.exposureAngles.reduce((total, range) => {
-    let rangeSize = range.end - range.start
-    if (rangeSize < 0) rangeSize += 360 // Handle wraparound
+    // Always calculate the difference as biggest angle - smallest angle
+    let rangeSize = Math.abs(range.end - range.start)
+    
+    // Handle wraparound cases (e.g., 350° to 10° should be 20°, not 340°)
+    if (rangeSize > 180) {
+      rangeSize = 360 - rangeSize
+    }
+    
     return total + rangeSize
   }, 0)
 })
