@@ -187,8 +187,8 @@ const getLocationFromIP = async () => {
     console.warn('IP geolocation failed:', error.message)
   }
   
-  // Default to Los Angeles
-  return { lat: 34.0522, lng: -118.2437, city: 'Los Angeles', country: 'US' }
+  // Default to Auckland
+  return { lat: -36.8485, lng: 174.7633, city: 'Auckland', country: 'NZ' }
 }
 
 const addCommunitySpots = () => {
